@@ -74,7 +74,7 @@ The Express API acts as the main gateway and coordinates authentication, orders,
 
 ### Recommended Hosting: **Render** (Web Service) or **Railway**
 1. **GitHub Connection**: Sync your repository.
-2. **Root Directory**: `review 1 (2)/review 1/ai medicine and disease prediction/backend-node`
+2. **Root Directory**: `backend-node`
 3. **Environment**: `Node`
 4. **Build Command**:
    ```bash
@@ -98,7 +98,7 @@ The Express API acts as the main gateway and coordinates authentication, orders,
 Because the Node API uses **LowDB** (storing users, doctor bookings, and orders in local JSON files inside `data/`), standard ephemeral cloud filesystems will wipe out your database on every server restart or redeploy.
 
 To make database data permanent, you **must mount a Persistent Volume**:
-- **Mount Path**: `/opt/render/project/src/review 1 (2)/review 1/ai medicine and disease prediction/backend-node/data`
+- **Mount Path**: `/opt/render/project/src/backend-node/data`
 - **Size**: `1 GB` (free/basic volume is plenty for text/JSON storage)
 
 ---
@@ -108,7 +108,7 @@ Once both backends are live, build and deploy the React frontend pointing to you
 
 ### Recommended Hosting: **Vercel** or **Netlify**
 1. **Create Project**: Connect your GitHub repository.
-2. **Root Directory**: Set to `review 1 (2)/review 1/ai medicine and disease prediction/frontend`
+2. **Root Directory**: Set to `frontend`
 3. **Framework Preset**: `Vite`
 4. **Build Command**:
    ```bash
