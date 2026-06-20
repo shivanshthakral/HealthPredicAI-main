@@ -9,6 +9,22 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const ML_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5001';
 
+// Centralized ML Service Error Handler
+const handleMLError = (error, res, fallbackMessage) => {
+    let rawError = error.response?.data || error.message;
+    console.error(`AI Service Error:`, rawError);
+    
+    // Check if the response contains HTML (routing mismatch / server loop / 404 page)
+    if (typeof rawError === 'string' && (rawError.trim().startsWith('<') || rawError.includes('<!DOCTYPE') || rawError.includes('Cannot POST'))) {
+        rawError = `ML Service returned an invalid response (HTML). Please verify that the ML_SERVICE_URL environment variable in your Node backend's Render settings is pointing to the correct Flask ML Service (port 5001) and not the Node backend itself.`;
+    }
+    
+    // Send structured JSON error to frontend
+    res.status(error.response?.status || 500).json({
+        error: rawError || fallbackMessage
+    });
+};
+
 // Proxy helper
 const proxyRequest = async (method, url, data, res, headers = {}) => {
     try {
@@ -21,13 +37,7 @@ const proxyRequest = async (method, url, data, res, headers = {}) => {
         });
         res.json(response.data);
     } catch (error) {
-        const mlError = error.response?.data || error.message;
-        console.error(`AI Service Error (${url}):`, mlError);
-        if (error.response) {
-            res.status(error.response.status).json(error.response.data);
-        } else {
-            res.status(500).json({ error: 'AI Service Unavailable', detail: mlError });
-        }
+        handleMLError(error, res, 'AI Service Unavailable');
     }
 };
 
@@ -47,13 +57,7 @@ const forwardImageToOcr = async (file, res) => {
         );
         res.json(response.data);
     } catch (error) {
-        const mlError = error.response?.data || error.message;
-        console.error("OCR Proxy Error:", mlError);
-        if (error.response) {
-            res.status(error.response.status).json(error.response.data);
-        } else {
-            res.status(500).json({ error: 'ML Service Failed', detail: mlError });
-        }
+        handleMLError(error, res, 'ML Service Failed');
     }
 };
 
@@ -66,10 +70,7 @@ router.post('/predict', async (req, res) => {
     );
     res.json(response.data);
   } catch (error) {
-    console.error("ML ERROR:", error.response?.data || error.message);
-    res.status(500).json({
-      error: error.response?.data || "ML Service Failed"
-    });
+    handleMLError(error, res, 'ML Service Failed');
   }
 });
 
@@ -82,10 +83,7 @@ router.post('/chat', async (req, res) => {
     );
     res.json(response.data);
   } catch (error) {
-    console.error("ML ERROR:", error.response?.data || error.message);
-    res.status(500).json({
-      error: error.response?.data || "ML Service Failed"
-    });
+    handleMLError(error, res, 'ML Service Failed');
   }
 });
 
@@ -103,10 +101,7 @@ router.post('/ocr', upload.single('file'), async (req, res) => {
     );
     res.json(response.data);
   } catch (error) {
-    console.error("ML ERROR:", error.response?.data || error.message);
-    res.status(500).json({
-      error: error.response?.data || "ML Service Failed"
-    });
+    handleMLError(error, res, 'ML Service Failed');
   }
 });
 
@@ -144,8 +139,7 @@ router.post('/prescription/extract', upload.any(), async (req, res) => {
             res,
         );
     } catch (error) {
-        console.error('Prescription Extract Error:', error.message);
-        res.status(500).json({ error: 'Prescription extraction service unavailable', detail: error.message });
+        handleMLError(error, res, 'Prescription extraction service unavailable');
     }
 });
 
@@ -203,11 +197,7 @@ router.post('/analyze-report', upload.any(), async (req, res) => {
             error: 'Provide multipart `file`/`image`, or JSON {"tests":[...]} for manual values, or {"base64":"..."} for an image.',
         });
     } catch (error) {
-        console.error('Analyze Report Error:', error.message);
-        if (error.response) {
-            return res.status(error.response.status).json(error.response.data);
-        }
-        res.status(500).json({ error: 'Report analysis service unavailable', detail: error.message });
+        handleMLError(error, res, 'Report analysis service unavailable');
     }
 });
 
@@ -222,7 +212,7 @@ router.get('/reference-ranges', async (req, res) => {
         const response = await axios.get(`${ML_URL}/reference-ranges`, { timeout: 15_000 });
         res.json(response.data);
     } catch (error) {
-        res.status(500).json({ error: 'Reference range service unavailable' });
+        handleMLError(error, res, 'Reference range service unavailable');
     }
 });
 
