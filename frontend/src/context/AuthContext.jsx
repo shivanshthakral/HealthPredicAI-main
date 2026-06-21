@@ -1,4 +1,4 @@
-﻿import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from "react";
+import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from "react";
 import axios from "axios";
 
 const API_BASE = import.meta.env.VITE_API_URL;
@@ -118,7 +118,7 @@ export function AuthProvider({ children }) {
     try {
       const res = await axios.post(`${API_BASE}/api/auth/register`, data, {
         headers: { "Content-Type": "application/json" },
-        timeout: 10000,
+        timeout: 35000, // 35s — Render free tier cold start can take up to 30s
       });
       if (res.status === 201 && res.data.token) {
         clearSession();
@@ -129,8 +129,16 @@ export function AuthProvider({ children }) {
       }
       return { success: false, error: res.data?.error || "Registration failed" };
     } catch (err) {
-      const msg = err.response?.data?.error
-        || (err.code === "ERR_NETWORK" ? "Cannot reach server — is the backend running?" : err.message);
+      let msg = err.response?.data?.error;
+      if (!msg) {
+        if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
+          msg = "Registration timed out — the server may be starting up (Render cold start). Please wait 30 seconds and try again.";
+        } else if (err.code === "ERR_NETWORK") {
+          msg = "Cannot reach server — is the backend running?";
+        } else {
+          msg = err.message;
+        }
+      }
       return { success: false, error: msg };
     }
   }, []);

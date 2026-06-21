@@ -5,35 +5,56 @@ const FormData = require('form-data');
 const multer = require('multer');
 
 // Configure multer for file uploads
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-const ML_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5001';
+const ML_URL = process.env.ML_SERVICE_URL || 'https://healthpredicai-main.onrender.com';
 
-// Centralized ML Service Error Handler
+// ── Timeouts ──────────────────────────────────────────────────────────────────
+const PREDICT_TIMEOUT  = 30_000;  // 30s — ML model inference
+const CHAT_TIMEOUT     = 30_000;  // 30s — Gemini / GPT call
+const OCR_TIMEOUT      = 60_000;  // 60s — vision OCR call
+const REPORT_TIMEOUT   = 90_000;  // 90s — report analysis
+const GENERAL_TIMEOUT  = 30_000;  // 30s — all other ML calls
+
+// ── Centralized ML Service Error Handler ─────────────────────────────────────
 const handleMLError = (error, res, fallbackMessage) => {
+    const reqId = res.req?.requestId || 'unknown';
     let rawError = error.response?.data || error.message;
-    console.error(`AI Service Error:`, rawError);
-    
-    // Check if the response contains HTML (routing mismatch / server loop / 404 page)
+    console.error(`[AI Error] [${reqId}] ${fallbackMessage}:`, rawError);
+
+    // Check if the response contains HTML (routing mismatch / 404 page)
     if (typeof rawError === 'string' && (rawError.trim().startsWith('<') || rawError.includes('<!DOCTYPE') || rawError.includes('Cannot POST'))) {
-        rawError = `ML Service returned an invalid response (HTML). Please verify that the ML_SERVICE_URL environment variable in your Node backend's Render settings is pointing to the correct Flask ML Service (port 5001) and not the Node backend itself.`;
+        rawError = `ML Service returned an invalid response (HTML). Verify ML_SERVICE_URL env var points to the Flask ML Service, not the Node backend.`;
     }
-    
-    // Send structured JSON error to frontend
+
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+        return res.status(504).json({
+            error: 'ML Service timed out. The service may be waking up from sleep (Render free tier). Please retry in 30 seconds.',
+            retry: true,
+        });
+    }
+
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        return res.status(503).json({
+            error: 'ML Service is unreachable. Check ML_SERVICE_URL environment variable.',
+            ml_url: ML_URL,
+        });
+    }
+
     res.status(error.response?.status || 500).json({
-        error: rawError || fallbackMessage
+        error: rawError || fallbackMessage,
     });
 };
 
-// Proxy helper
-const proxyRequest = async (method, url, data, res, headers = {}) => {
+// ── Proxy helper with configurable timeout ────────────────────────────────────
+const proxyRequest = async (method, url, data, res, headers = {}, timeout = GENERAL_TIMEOUT) => {
     try {
         const response = await axios({
             method,
             url: `${ML_URL}${url}`,
             data,
             headers: { 'Content-Type': 'application/json', ...headers },
-            timeout: 60000,
+            timeout,
         });
         res.json(response.data);
     } catch (error) {
@@ -47,80 +68,93 @@ const forwardImageToOcr = async (file, res) => {
         const formData = new FormData();
         formData.append('file', file.buffer, {
             filename: file.originalname || 'prescription.png',
-            contentType: file.mimetype || 'image/png'
+            contentType: file.mimetype || 'image/png',
         });
-        
+
         const response = await axios.post(
             `${ML_URL}/ocr`,
             formData,
-            { headers: { ...formData.getHeaders() } }
+            {
+                headers: { ...formData.getHeaders() },
+                timeout: OCR_TIMEOUT,
+                maxContentLength: 25 * 1024 * 1024,
+                maxBodyLength: 25 * 1024 * 1024,
+            }
         );
         res.json(response.data);
     } catch (error) {
-        handleMLError(error, res, 'ML Service Failed');
+        handleMLError(error, res, 'ML Service OCR Failed');
     }
 };
 
-// Predict Disease
+// ── Predict Disease ───────────────────────────────────────────────────────────
 router.post('/predict', async (req, res) => {
-  try {
-    const response = await axios.post(
-      `${ML_URL}/predict`,
-      req.body
-    );
-    res.json(response.data);
-  } catch (error) {
-    handleMLError(error, res, 'ML Service Failed');
-  }
+    try {
+        const response = await axios.post(
+            `${ML_URL}/predict`,
+            req.body,
+            { timeout: PREDICT_TIMEOUT }
+        );
+        res.json(response.data);
+    } catch (error) {
+        handleMLError(error, res, 'Prediction Service Failed');
+    }
 });
 
-// Chat with AI
+// ── Chat with AI ──────────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
-  try {
-    const response = await axios.post(
-      `${ML_URL}/chat`,
-      req.body
-    );
-    res.json(response.data);
-  } catch (error) {
-    handleMLError(error, res, 'ML Service Failed');
-  }
+    try {
+        const response = await axios.post(
+            `${ML_URL}/chat`,
+            req.body,
+            { timeout: CHAT_TIMEOUT }
+        );
+        res.json(response.data);
+    } catch (error) {
+        handleMLError(error, res, 'Chat Service Failed');
+    }
 });
 
-// OCR Prescription
+// ── OCR Prescription ──────────────────────────────────────────────────────────
 router.post('/ocr', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const formData = new FormData();
-    formData.append('file', req.file.buffer, req.file.originalname || 'prescription.png');
-    
-    const response = await axios.post(
-      `${ML_URL}/ocr`,
-      formData,
-      { headers: { ...formData.getHeaders() } }
-    );
-    res.json(response.data);
-  } catch (error) {
-    handleMLError(error, res, 'ML Service Failed');
-  }
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+        const formData = new FormData();
+        formData.append('file', req.file.buffer, {
+            filename: req.file.originalname || 'prescription.png',
+            contentType: req.file.mimetype || 'image/png',
+        });
+
+        const response = await axios.post(
+            `${ML_URL}/ocr`,
+            formData,
+            {
+                headers: { ...formData.getHeaders() },
+                timeout: OCR_TIMEOUT,
+                maxContentLength: 25 * 1024 * 1024,
+                maxBodyLength: 25 * 1024 * 1024,
+            }
+        );
+        res.json(response.data);
+    } catch (error) {
+        handleMLError(error, res, 'OCR Service Failed');
+    }
 });
 
-// Canonical endpoint per product spec (accepts field name `image` OR `file`)
+// ── Prescription (canonical, accepts `image` OR `file`) ──────────────────────
 router.post('/prescription', upload.any(), (req, res) => {
     const file = (req.files && req.files[0]) || req.file;
     return forwardImageToOcr(file, res);
 });
 
-// Prescription Extract — accepts EITHER multipart (image/file) OR JSON {base64}
+// ── Prescription Extract ──────────────────────────────────────────────────────
 router.post('/prescription/extract', upload.any(), async (req, res) => {
     try {
-        // Multipart path
         const uploaded = (req.files && req.files[0]) || req.file;
         if (uploaded) {
             return forwardImageToOcr(uploaded, res);
         }
 
-        // JSON base64 path (legacy)
         const { base64 } = req.body || {};
         if (!base64) {
             return res.status(400).json({
@@ -135,7 +169,7 @@ router.post('/prescription/extract', upload.any(), async (req, res) => {
         const ext = mimeType.includes('jpeg') || mimeType.includes('jpg') ? 'jpg' : 'png';
 
         return forwardImageToOcr(
-            { buffer, originalname: `prescription.${ext}` },
+            { buffer, originalname: `prescription.${ext}`, mimetype: mimeType },
             res,
         );
     } catch (error) {
@@ -143,7 +177,7 @@ router.post('/prescription/extract', upload.any(), async (req, res) => {
     }
 });
 
-// Medical Report Analyzer — accepts multipart (image/file/PDF) OR JSON tests/base64
+// ── Medical Report Analyzer ───────────────────────────────────────────────────
 router.post('/analyze-report', upload.any(), async (req, res) => {
     try {
         const gender = (req.body && req.body.gender) || 'female';
@@ -151,22 +185,23 @@ router.post('/analyze-report', upload.any(), async (req, res) => {
 
         if (uploaded) {
             const formData = new FormData();
-            formData.append('file', uploaded.buffer, uploaded.originalname || 'report.png');
+            formData.append('file', uploaded.buffer, {
+                filename: uploaded.originalname || 'report.png',
+                contentType: uploaded.mimetype || 'image/png',
+            });
             formData.append('gender', gender);
 
             const response = await axios.post(`${ML_URL}/analyze-report`, formData, {
                 headers: { ...formData.getHeaders() },
                 maxContentLength: 25 * 1024 * 1024,
                 maxBodyLength: 25 * 1024 * 1024,
-                timeout: 90_000,
+                timeout: REPORT_TIMEOUT,
             });
             return res.json(response.data);
         }
 
-        // JSON path: either {tests:[...]} for manual entry, or {base64:"..."} image
         const body = req.body || {};
         if (body.base64) {
-            // Translate base64 → multipart for the Python service
             const matches = body.base64.match(/^data:(.+);base64,(.+)$/);
             const mimeType = matches ? matches[1] : 'image/png';
             const rawBase64 = matches ? matches[2] : body.base64;
@@ -180,7 +215,9 @@ router.post('/analyze-report', upload.any(), async (req, res) => {
 
             const response = await axios.post(`${ML_URL}/analyze-report`, formData, {
                 headers: { ...formData.getHeaders() },
-                timeout: 90_000,
+                timeout: REPORT_TIMEOUT,
+                maxContentLength: 25 * 1024 * 1024,
+                maxBodyLength: 25 * 1024 * 1024,
             });
             return res.json(response.data);
         }
@@ -188,7 +225,7 @@ router.post('/analyze-report', upload.any(), async (req, res) => {
         if (body.tests) {
             const response = await axios.post(`${ML_URL}/analyze-report`, body, {
                 headers: { 'Content-Type': 'application/json' },
-                timeout: 60_000,
+                timeout: REPORT_TIMEOUT,
             });
             return res.json(response.data);
         }
@@ -201,12 +238,12 @@ router.post('/analyze-report', upload.any(), async (req, res) => {
     }
 });
 
-// Recommend specialist based on disease
+// ── Recommend specialist ──────────────────────────────────────────────────────
 router.post('/recommend-specialist', async (req, res) => {
-    await proxyRequest('post', '/recommend-specialist', req.body, res);
+    await proxyRequest('post', '/recommend-specialist', req.body, res, {}, GENERAL_TIMEOUT);
 });
 
-// Reference ranges (passthrough GET)
+// ── Reference ranges ──────────────────────────────────────────────────────────
 router.get('/reference-ranges', async (req, res) => {
     try {
         const response = await axios.get(`${ML_URL}/reference-ranges`, { timeout: 15_000 });

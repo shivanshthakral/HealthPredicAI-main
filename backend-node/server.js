@@ -3,7 +3,7 @@ const express = require('express');
 const cors    = require('cors');
 const axios   = require('axios');
 
-const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://127.0.0.1:5001';
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'https://healthpredicai-main.onrender.com';
 const defaultOrigins = [
   'https://health-predict-ai-two.vercel.app',
   'http://localhost:5173',
@@ -31,6 +31,15 @@ const corsOptions = {
 const app  = express();
 const PORT = process.env.PORT || 5000;
 
+// ── Security headers ─────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
+
 // ── CORS ────────────────────────────────────────────────────────────────────
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
@@ -38,8 +47,11 @@ app.options('*', cors(corsOptions));
 // ── Middleware ──────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ── Request logging with unique IDs ─────────────────────────────────────────
 app.use((req, _res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  req.requestId = `${Date.now().toString(36)}-${Math.random().toString(36).substr(2,5)}`;
+  console.log(`[${new Date().toISOString()}] [${req.requestId}] ${req.method} ${req.url}`);
   next();
 });
 
@@ -57,7 +69,13 @@ app.get('/', (_req, res) => res.json({
   endpoints:   ['/api/auth', '/api/ai', '/api/orders', '/api/doctors', '/api/doctor', '/api/admin', '/api/chat'],
 }));
 
-app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date() }));
+// ── Health check (Render uses this to determine if service is up) ────────────
+app.get('/health', (_req, res) => res.status(200).json({
+  status:    'healthy',
+  timestamp: new Date().toISOString(),
+  service:   'backend-node',
+  version:   '2.0.0',
+}));
 
 app.use('/api/auth',    authRoutes);
 app.use('/api/ai',      aiRoutes);
@@ -77,31 +95,32 @@ app.use('/api/chat', (req, res, next) => {
 app.all('/api/*', async (req, res) => {
     // Strip /api prefix but keep path + query string for the ML service
     const mlPath = req.originalUrl.replace(/^\/api/, '');
-    console.log(`[ML proxy] ${req.method} ${mlPath}`);
+    console.log(`[ML proxy] [${req.requestId}] ${req.method} ${mlPath}`);
     try {
         const mlResponse = await axios({
             method: req.method,
             url: `${ML_SERVICE_URL}${mlPath}`,
             data: req.body,
             headers: { 'Content-Type': 'application/json' },
-            timeout: 30000,
+            timeout: 60000, // 60s for cold-start ML service
         });
         res.json(mlResponse.data);
     } catch (err) {
-        console.error(`ML proxy error (${mlPath}):`, err.message);
+        console.error(`[ML proxy error] [${req.requestId}] (${mlPath}):`, err.message);
         if (err.response) res.status(err.response.status).json(err.response.data);
         else res.status(503).json({ error: 'ML service unavailable', message: err.message });
     }
 });
 
-// ── Error handler ───────────────────────────────────────────────────────────
-app.use((err, _req, res, _next) => {
-  console.error(err.stack);
+// ── Global error handler ─────────────────────────────────────────────────────
+app.use((err, req, res, _next) => {
+  console.error(`[ERROR] [${req.requestId || 'unknown'}]`, err.stack);
   res.status(500).json({ error: 'Internal Server Error', message: err.message });
 });
 
-app.listen(PORT, () => {
-  console.log(`\n🚀  HealthAssist API running on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n🚀  HealthAssist API running on http://0.0.0.0:${PORT}`);
+  console.log(`    ML Service: ${ML_SERVICE_URL}`);
   console.log(`    Roles: patient | doctor | admin`);
   console.log(`    Env:   ${process.env.NODE_ENV || 'development'}\n`);
 });

@@ -333,8 +333,8 @@ def _chat_with_gemini(user_message, conversation_history, system_prompt, lang_in
                 "maxOutputTokens": 900
             }
         }
-        # Reduced timeout to 8 seconds since suspended keys reject immediately or fail quickly
-        resp = requests.post(url, json=payload, timeout=8)
+        # 25s timeout — long enough for Render cold-starts, short enough to not block the thread
+        resp = requests.post(url, json=payload, timeout=25)
         if resp.status_code == 403:
             IS_GEMINI_KEY_VALID = False
             print("[Chatbot] Gemini API key returned 403. Disabling direct calls and using cached fallbacks.")

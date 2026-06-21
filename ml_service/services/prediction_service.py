@@ -58,12 +58,27 @@ def _load_models():
                             ('logistic_regression', '_lr_model')]:
         p = MODELS_DIR / f"{name}.pkl"
         if p.exists():
-            globals()[var_name] = loader(p)
-            print(f"[OK] Loaded model: {name}")
+            try:
+                model = loader(p)
+                # ── sklearn 1.5+ compatibility fix ────────────────────────────
+                # LogisticRegression.multi_class was deprecated and removed.
+                # Strip it from loaded pickles to avoid AttributeError.
+                if hasattr(model, 'multi_class'):
+                    try:
+                        del model.multi_class
+                    except Exception:
+                        pass
+                globals()[var_name] = model
+                print(f"[OK] Loaded model: {name}")
+            except Exception as e:
+                print(f"[WARN] Could not load model {name}: {e}")
 
     le_path = MODELS_DIR / "label_encoder.pkl"
     if le_path.exists():
-        _label_encoder = loader(le_path)
+        try:
+            _label_encoder = loader(le_path)
+        except Exception as e:
+            print(f"[WARN] Could not load label encoder: {e}")
 
     # Load data CSVs
     try:
@@ -171,14 +186,30 @@ def predict_disease(symptoms, user_profile=None):
         weights = []
 
         if _rf_model:
-            probs_list.append(_rf_model.predict_proba(vector)[0])
-            weights.append(0.5)
+            try:
+                probs_list.append(_rf_model.predict_proba(vector)[0])
+                weights.append(0.5)
+            except Exception as e:
+                print(f"[WARN] Random forest predict_proba failed: {e}")
+
         if _xgb_model:
-            probs_list.append(_xgb_model.predict_proba(vector)[0])
-            weights.append(0.3)
+            try:
+                probs_list.append(_xgb_model.predict_proba(vector)[0])
+                weights.append(0.3)
+            except Exception as e:
+                print(f"[WARN] XGBoost predict_proba failed: {e}")
+
         if _lr_model:
-            probs_list.append(_lr_model.predict_proba(vector)[0])
-            weights.append(0.2)
+            try:
+                probs_list.append(_lr_model.predict_proba(vector)[0])
+                weights.append(0.2)
+            except Exception as e:
+                print(f"[WARN] LogisticRegression predict_proba failed (sklearn compat?): {e}")
+
+        # Guard: if no model succeeded, fall back to rule-based
+        if not probs_list:
+            print("[WARN] All models failed predict_proba — falling back to rule-based")
+            return _rule_based_predict(symptoms, user_profile, has_emergency)
 
         # Normalize weights
         total_w = sum(weights)

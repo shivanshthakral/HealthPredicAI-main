@@ -34,7 +34,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ROOT
+# ROOT & HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/", methods=["GET"])
@@ -44,7 +44,7 @@ def root():
         "status": "running",
         "version": "3.0.0",
         "endpoints": [
-            "/predict", "/symptoms", "/retrain",
+            "/health", "/predict", "/symptoms", "/retrain",
             "/ocr", "/chat", "/languages",
             "/doctors", "/doctors/slots", "/book-appointment", "/appointments",
             "/hospitals", "/health-score", "/diet-plan", "/fitness-plan",
@@ -58,6 +58,17 @@ def root():
             "/reminders", "/reminders/add", "/reminders/delete", "/reminders/toggle", "/reminders/today",
             "/lifestyle-plan",
         ]
+    }), 200
+
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint — required by Render and load balancers."""
+    return jsonify({
+        "status": "healthy",
+        "service": "ml-service",
+        "version": "3.0.0",
+        "timestamp": datetime.now().isoformat(),
     }), 200
 
 
@@ -1650,5 +1661,7 @@ if __name__ == "__main__":
     print("=" * 50)
     print("[+] HealthPredict AI Microservice v3.0")
     print(f"   Port: {port}")
+    print(f"   GEMINI_API_KEY set: {bool(os.environ.get('GEMINI_API_KEY', ''))}")
+    print(f"   OPENAI_API_KEY set: {bool(os.environ.get('OPENAI_API_KEY', ''))}")
     print("=" * 50)
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Header from '../components/Header';
@@ -291,9 +291,14 @@ export default function Predict() {
     }).join('; ');
     const combined = [freeText.trim(), bodyCtx].filter(Boolean).join('. ');
     setLoading(true); setError(''); setResult(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 35000); // 35s timeout
+
     try {
       const res = await fetch(`${API}/api/ai/predict`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           symptoms: selectedSymptoms, free_text: combined,
           user_profile: { age: parseInt(age) || 30, gender: gender || 'unknown' },
@@ -302,11 +307,17 @@ export default function Predict() {
           body_regions: Object.entries(annotations).map(([zid, a]) => ({ region: ZONES.find(z => z.id === zid)?.label, ...a })),
         }),
       });
+      clearTimeout(timeoutId);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setResult(data);
     } catch (e) {
-      setError(e.message || 'Could not reach server. Please check your connection.');
+      clearTimeout(timeoutId);
+      if (e.name === 'AbortError') {
+        setError('Analysis timed out. The AI service may be starting up — please wait 30 seconds and try again.');
+      } else {
+        setError(e.message || 'Could not reach server. Please check your connection.');
+      }
     }
     setLoading(false);
   };
