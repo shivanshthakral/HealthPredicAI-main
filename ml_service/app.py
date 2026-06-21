@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 # Load .env file if present
 try:
     from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'), override=True)
+    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'), override=False)
 except Exception:
     pass
 
@@ -114,7 +114,7 @@ def root():
         "version": "3.0.0",
         "endpoints": [
             "/health", "/predict", "/symptoms", "/retrain",
-            "/ocr", "/chat", "/languages",
+            "/ocr", "/chat", "/chat-test", "/languages",
             "/doctors", "/doctors/slots", "/book-appointment", "/appointments",
             "/hospitals", "/health-score", "/diet-plan", "/fitness-plan",
             "/generate-report", "/vaccination-schedule",
@@ -270,6 +270,90 @@ def chat():
         return jsonify(result), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/chat-test", methods=["POST"])
+def chat_test():
+    """Verify Gemini and OpenAI API keys and connectivity."""
+    try:
+        data = request.get_json(silent=True) or {}
+        message = data.get("message", "What is diabetes?")
+
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+
+        results = {}
+
+        # 1. Test Gemini
+        if gemini_key:
+            import requests
+            model = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": message}]}],
+                "generationConfig": {"temperature": 0.6, "maxOutputTokens": 150}
+            }
+            try:
+                resp = requests.post(url, json=payload, timeout=8)
+                if resp.status_code == 200:
+                    res_json = resp.json()
+                    text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+                    results["gemini"] = {
+                        "status": "healthy",
+                        "response": text.strip()
+                    }
+                else:
+                    results["gemini"] = {
+                        "status": "error",
+                        "error_code": resp.status_code,
+                        "details": resp.text[:300]
+                    }
+            except Exception as e:
+                results["gemini"] = {
+                    "status": "failed",
+                    "error": str(e)
+                }
+        else:
+            results["gemini"] = {
+                "status": "missing",
+                "details": "GEMINI_API_KEY is not set"
+            }
+
+        # 2. Test OpenAI
+        if openai_key:
+            from openai import OpenAI
+            try:
+                client = OpenAI(api_key=openai_key)
+                completion = client.chat.completions.create(
+                    model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                    messages=[{"role": "user", "content": message}],
+                    max_tokens=150,
+                    timeout=8
+                )
+                text = (completion.choices[0].message.content or "").strip()
+                results["openai"] = {
+                    "status": "healthy",
+                    "response": text
+                }
+            except Exception as e:
+                results["openai"] = {
+                    "status": "failed",
+                    "error": str(e)
+                }
+        else:
+            results["openai"] = {
+                "status": "missing",
+                "details": "OPENAI_API_KEY is not set"
+            }
+
+        return jsonify({
+            "message": "API connectivity check results",
+            "results": results
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 
 @app.route("/languages", methods=["GET"])

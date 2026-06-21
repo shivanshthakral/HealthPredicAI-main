@@ -17,18 +17,40 @@ except Exception:
     REQUESTS_OK = False
 
 # ─── Configuration ──────────────────────────────────────────────────────────────
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MAX_TOKENS = int(os.environ.get("OPENAI_MAX_TOKENS", "900"))
 OPENAI_TEMPERATURE = float(os.environ.get("OPENAI_TEMPERATURE", "0.6"))
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
 
-_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Global HTTP Session for connection reuse and performance optimization
+_http_session = requests.Session() if REQUESTS_OK else None
 
+_last_openai_key = None
+_client = None
+
+def _get_openai_client():
+    global _client, _last_openai_key
+    current_key = os.environ.get("OPENAI_API_KEY", "")
+    if current_key != _last_openai_key:
+        _last_openai_key = current_key
+        if current_key:
+            _client = OpenAI(api_key=current_key)
+        else:
+            _client = None
+    return _client
+
+_last_gemini_key = None
 IS_GEMINI_KEY_VALID = True
 WORKING_PROVIDER = None
+
+def _check_gemini_key_update():
+    global IS_GEMINI_KEY_VALID, _last_gemini_key
+    current_key = os.environ.get("GEMINI_API_KEY", "")
+    if current_key != _last_gemini_key:
+        IS_GEMINI_KEY_VALID = True
+        _last_gemini_key = current_key
+
 
 try:
     from langdetect import detect as detect_lang, DetectorFactory
@@ -110,51 +132,33 @@ def _build_system_prompt(lang_name, lang_native, is_emergency):
     emergency_block = ""
     if is_emergency:
         emergency_block = (
-            "\n\nTHIS MESSAGE APPEARS TO DESCRIBE A MEDICAL EMERGENCY.\n"
-            "- Open your reply with a clear, calm emergency alert.\n"
-            "- Tell the user to call local emergency services IMMEDIATELY "
-            "(India: 108 Ambulance / 112 Emergency; US: 911; UK: 999; EU: 112).\n"
-            "- Give 2-4 critical first-aid steps for the described situation.\n"
-            "- Do NOT delay by asking long clarifying questions first.\n"
+            "\n\n[CRITICAL] MEDICAL EMERGENCY DETECTED:\n"
+            "- Open your response with an immediate, clear emergency warning.\n"
+            "- Direct the user to call local emergency services immediately (India: 108 Ambulance / 112 Emergency; US: 911; UK: 999; EU: 112).\n"
+            "- Provide 2-4 simple, actionable first-aid steps.\n"
+            "- Do not ask clarifying questions first."
         )
 
-    return f"""You are MedAI, a world-class, empathetic, multilingual AI medical assistant.
-You help patients understand symptoms, conditions, medicines, precautions, diet,
-fitness, and mental wellness — and guide them to the right specialist or care level.
+    return f"""You are the HealthPredict AI Clinical Copilot, a world-class, medically-accurate, and empathetic AI clinical decision partner.
 
-LANGUAGE RULES (CRITICAL):
-- The user's language is {lang_name} ({lang_native}).
-- Respond ENTIRELY in {lang_name}. Every sentence, every word, including headings.
-- If the user mixes languages (e.g. Hinglish), reply in the SAME mixed style.
-- Never switch languages mid-reply unless the user does.
+Capabilities:
+- Symptom Analysis: Help patients understand symptoms and potential medical causes (as general possibilities, not definitive diagnoses).
+- Medical Education: Explain diseases, conditions, risk factors, and anatomy in simple terms.
+- Report Explanation: Explain lab results, medical reports, or vital readings and reference ranges.
+- Drug Interaction Guidance: Provide general safety information, common side effects, and potential drug interactions.
+- Lifestyle Guidance: Suggest diet, nutrition, fitness, and habits tailored to health conditions.
+- Wellness Coaching: Provide guidance on stress management, sleep, and mental well-being with compassion.
 
-MEDICAL SCOPE — answer clearly and helpfully on:
-1. Symptoms and what conditions they MIGHT indicate (possibilities, not diagnoses).
-2. Diseases: what they are, causes, risk factors, typical course.
-3. Medicines: general category, common uses, common side effects, interactions —
-   NEVER prescribe a specific drug or dosage. Always defer dosing to a doctor.
-4. Precautions, home-care, lifestyle changes, red-flag warning signs.
-5. Diet & nutrition tailored to the condition.
-6. Fitness & physical activity suitable for the condition.
-7. Mental wellness: anxiety, stress, sleep, low mood — with compassion.
-8. Which doctor specialty to consult (e.g. cardiologist, dermatologist, ENT).
+Strict Safety Rules:
+1. Never claim diagnosis certainty. Always frame possibilities as options to discuss with a physician.
+2. Encourage professional consultation. Advise consulting a doctor for definitive diagnosis and treatment.
+3. Be concise. Keep replies structured, using clear sections or bullet points. Avoid overwhelming the user.
+4. Be medically accurate. Do not invent drug names, dosages, or medical facts. Never tell a user to stop prescribed medication.
+5. Use user language: The user's language is {lang_name} ({lang_native}). You MUST reply ENTIRELY in {lang_name}. If the user mixes languages (e.g. Hinglish), adopt the same mixed style for natural communication.
+6. Suicidal/Self-Harm Ideation: Respond with immediate warmth and empathy, do not judge, provide helpline resources (e.g. India mental health helpline: 1860-2662-345), and urge them to connect with professionals.
+7. End each clinical response with a brief medical disclaimer indicating this is for informational purposes only and a real doctor must be consulted.
 
-SAFETY RULES (NON-NEGOTIABLE):
-- You are NOT a doctor. You do NOT diagnose. You do NOT prescribe.
-- Never invent medicine names, dosages, or brand names.
-- Never tell a user to stop prescribed medication.
-- For serious, worsening, or red-flag symptoms, advise seeing a doctor urgently.
-- For suicidal ideation or self-harm: respond with warmth, do NOT judge, share
-  a helpline, and urge them to reach a trusted person or professional now.
-- End each substantive reply with a short disclaimer that this is general
-  guidance and a real doctor should be consulted for diagnosis or treatment.
-
-STYLE:
-- Warm, calm, professional. Plain language. No heavy jargon.
-- Structure longer answers with short sections or bullets.
-- Keep replies focused — typically 4-10 short sentences unless more detail is asked.
-- If the user's message is unclear, ask ONE concise clarifying question.
-- If the user asks something unrelated to health, gently steer back to health topics.{emergency_block}"""
+{emergency_block}"""
 
 
 # ─── Message Formatting ─────────────────────────────────────────────────────────
@@ -168,6 +172,59 @@ def _format_history(conversation_history):
         if content.strip():
             formatted.append({"role": role, "content": content})
     return formatted
+
+
+def _sanitize_conversation_history(conversation_history, user_message="", image=None):
+    """
+    Sanitize conversation history for Google Gemini.
+    Rules:
+    - Must start with a 'user' turn.
+    - Roles must strictly alternate between 'user' and 'model'.
+    - Consecutive turns with the same role are merged.
+    """
+    sanitized = []
+    for msg in conversation_history:
+        role_in = msg.get("role", "user")
+        role = "model" if role_in in ("bot", "model", "assistant") else "user"
+        content = msg.get("content") or msg.get("text") or ""
+        if not content.strip():
+            continue
+
+        if sanitized and sanitized[-1]["role"] == role:
+            # Merge duplicate consecutive roles
+            sanitized[-1]["parts"][0]["text"] += "\n" + content
+        else:
+            sanitized.append({
+                "role": role,
+                "parts": [{"text": content}]
+            })
+
+    # Ensure conversation starts with 'user'
+    while sanitized and sanitized[0]["role"] == "model":
+        sanitized.pop(0)
+
+    # Append current user content
+    current_parts = []
+    if image and image.get("base64"):
+        current_parts.append({
+            "inline_data": {
+                "mime_type": image.get("mime_type", "image/png"),
+                "data": image.get("base64")
+            }
+        })
+    current_parts.append({"text": user_message or "Please analyse this image."})
+
+    if sanitized and sanitized[-1]["role"] == "user":
+        # If last is user, merge parts
+        sanitized[-1]["parts"].extend(current_parts)
+    else:
+        sanitized.append({
+            "role": "user",
+            "parts": current_parts
+        })
+
+    return sanitized[-10:]
+
 
 
 def _build_user_content(user_message, image=None):
@@ -280,7 +337,14 @@ def _chat_with_gemini(user_message, conversation_history, system_prompt, lang_in
     """Call Google Gemini and get chatbot response."""
     global IS_GEMINI_KEY_VALID
     
-    if not IS_GEMINI_KEY_VALID or not GEMINI_API_KEY or not REQUESTS_OK:
+    # Dynamically check if the environment key was updated
+    _check_gemini_key_update()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    
+    if not IS_GEMINI_KEY_VALID or not gemini_key or not REQUESTS_OK:
+        reason = "GEMINI_API_KEY is not set" if not gemini_key else ("Gemini key marked invalid (returned 403 previously)" if not IS_GEMINI_KEY_VALID else "requests library missing")
+        print(f"[CHAT_FALLBACK_REASON] Gemini bypassed. Reason: {reason}")
+        print(f"[CHAT_PROVIDER] Using fallback provider (dynamic or simulated)")
         simulated = _generate_dynamic_fallback(user_message, conversation_history, system_prompt, detected_lang)
         if not simulated:
             simulated = _generate_simulated_response(user_message, detected_lang)
@@ -293,82 +357,84 @@ def _chat_with_gemini(user_message, conversation_history, system_prompt, lang_in
             "is_emergency": is_emergency,
         }
 
-    # Format history: alternating roles in user/model format
-    contents = []
-    for msg in conversation_history[-10:]:
-        role_in = msg.get("role", "user")
-        role = "model" if role_in in ("bot", "model", "assistant") else "user"
-        content = msg.get("content") or msg.get("text") or ""
-        if content.strip():
-            contents.append({
-                "role": role,
-                "parts": [{"text": content}]
-            })
+    # Format history strictly according to Gemini requirements
+    contents = _sanitize_conversation_history(conversation_history, user_message, image)
 
-    # Append current message
-    parts = []
-    if image and image.get("base64"):
-        parts.append({
-            "inline_data": {
-                "mime_type": image.get("mime_type", "image/png"),
-                "data": image.get("base64")
-            }
-        })
-    parts.append({"text": user_message or "Please analyse this image."})
-    
-    contents.append({
-        "role": "user",
-        "parts": parts
-    })
-
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents": contents,
-            "systemInstruction": {
-                "parts": [{"text": system_prompt}]
-            },
-            "generationConfig": {
-                "temperature": 0.6,
-                "maxOutputTokens": 900
-            }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={gemini_key}"
+    payload = {
+        "contents": contents,
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}]
+        },
+        "generationConfig": {
+            "temperature": 0.6,
+            "maxOutputTokens": 900
         }
-        # 25s timeout — long enough for Render cold-starts, short enough to not block the thread
-        resp = requests.post(url, json=payload, timeout=25)
-        if resp.status_code == 403:
-            IS_GEMINI_KEY_VALID = False
-            print("[Chatbot] Gemini API key returned 403. Disabling direct calls and using cached fallbacks.")
-            raise RuntimeError("gemini_suspended_key_403")
-        elif resp.status_code != 200:
-            raise RuntimeError(f"gemini_http_{resp.status_code}: {resp.text[:200]}")
+    }
 
+    max_retries = 2
+    timeout_seconds = 8
+    last_err = None
+    resp = None
+
+    print(f"[CHAT_PROVIDER] Calling Google Gemini API (model: {GEMINI_MODEL})")
+
+    for attempt in range(max_retries + 1):
+        try:
+            client_session = _http_session if _http_session else requests
+            resp = client_session.post(url, json=payload, timeout=timeout_seconds)
+            
+            if resp.status_code == 403:
+                IS_GEMINI_KEY_VALID = False
+                err_msg = f"Gemini API returned 403 Forbidden: {resp.text}"
+                print(f"[CHAT_FALLBACK_REASON] Gemini key auth failure: {err_msg}")
+                raise RuntimeError("gemini_suspended_key_403")
+            elif resp.status_code != 200:
+                raise RuntimeError(f"gemini_http_{resp.status_code}: {resp.text[:300]}")
+                
+            break
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_err = e
+            if attempt < max_retries:
+                print(f"[Chatbot] Gemini request failed (attempt {attempt + 1}/{max_retries + 1}): {e}. Retrying in 1s...")
+                time.sleep(1)
+            else:
+                print(f"[CHAT_FALLBACK_REASON] Gemini failed after {max_retries + 1} attempts. Error: {e}")
+                last_err = e
+        except Exception as e:
+            last_err = e
+            break
+
+    if resp is not None and resp.status_code == 200:
         res_json = resp.json()
         try:
-            text = res_json["candidates"][0]["content"]["parts"][0]["text"]
+            text = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print(f"[CHAT_RESPONSE] Source: gemini ({GEMINI_MODEL}), Response: '{text[:100]}...'")
+            return {
+                "response": text,
+                "detected_language": detected_lang,
+                "language_name": lang_info["name"],
+                "source": f"gemini ({GEMINI_MODEL})",
+                "emergency": emergency_info,
+                "is_emergency": is_emergency,
+            }
         except (KeyError, IndexError) as e:
-            raise RuntimeError(f"gemini_response_structure_unexpected: {e}, raw: {res_json}")
+            print(f"[CHAT_FALLBACK_REASON] Gemini response format unexpected: {e}")
+            last_err = RuntimeError(f"gemini_response_structure_unexpected: {e}, raw: {res_json}")
 
-        return {
-            "response": text.strip(),
-            "detected_language": detected_lang,
-            "language_name": lang_info["name"],
-            "source": f"gemini ({GEMINI_MODEL})",
-            "emergency": emergency_info,
-            "is_emergency": is_emergency,
-        }
-    except Exception as e:
-        print(f"[Chatbot] Gemini error: {e}")
-        simulated = _generate_dynamic_fallback(user_message, conversation_history, system_prompt, detected_lang)
-        if not simulated:
-            simulated = _generate_simulated_response(user_message, detected_lang)
-        return {
-            "response": simulated,
-            "detected_language": detected_lang,
-            "language_name": lang_info["name"],
-            "source": "gemini_simulated",
-            "emergency": emergency_info,
-            "is_emergency": is_emergency,
-        }
+    # Fallback if request failed or response format was bad
+    print(f"[CHAT_PROVIDER] Using fallback provider (dynamic or simulated)")
+    simulated = _generate_dynamic_fallback(user_message, conversation_history, system_prompt, detected_lang)
+    if not simulated:
+        simulated = _generate_simulated_response(user_message, detected_lang)
+    return {
+        "response": simulated,
+        "detected_language": detected_lang,
+        "language_name": lang_info["name"],
+        "source": "gemini_simulated",
+        "emergency": emergency_info,
+        "is_emergency": is_emergency,
+    }
 
 
 # ─── Main Chat Function ─────────────────────────────────────────────────────────
@@ -400,8 +466,16 @@ def chat_with_ai(user_message, conversation_history=None, language="auto", image
             "helplines": EMERGENCY_HELPLINES,
         }
 
-    # 3. Guard: missing API key
-    if _client is None and not GEMINI_API_KEY:
+    # Log incoming request details
+    print(f"[CHAT_REQUEST] Message: '{user_message}', Language: '{language}' (detected: '{detected_lang}'), History Turns: {len(conversation_history)}, Has Image: {image is not None}")
+
+    # Fetch latest API keys and clients
+    client = _get_openai_client()
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+
+    # 3. Guard: missing both API keys
+    if client is None and not gemini_key:
+        print("[CHAT_FALLBACK_REASON] Both OpenAI and Gemini API keys are missing in environment")
         return {
             "response": (
                 "The chatbot is not configured. An API key is missing. "
@@ -414,66 +488,76 @@ def chat_with_ai(user_message, conversation_history=None, language="auto", image
             "is_emergency": is_emergency,
         }
 
-    # 4. Messages / System Prompt
+    # 4. System prompt
     system_prompt = _build_system_prompt(
         lang_info["name"], lang_info["native"], is_emergency
     )
 
-    if _client is None and GEMINI_API_KEY:
+    # Route: Try OpenAI first if configured
+    if client is not None:
+        print(f"[CHAT_PROVIDER] Calling OpenAI API (model: {OPENAI_MODEL})")
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(_format_history(conversation_history))
+        messages.append({"role": "user", "content": _build_user_content(user_message, image)})
+
+        last_error = None
+        for attempt in range(3):
+            try:
+                # Apply 8-second timeout for responsive user experience
+                completion = client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=messages,
+                    temperature=OPENAI_TEMPERATURE,
+                    max_tokens=OPENAI_MAX_TOKENS,
+                    timeout=8
+                )
+                text = (completion.choices[0].message.content or "").strip()
+                if not text:
+                     raise RuntimeError("Empty response from OpenAI")
+
+                print(f"[CHAT_RESPONSE] Source: openai ({OPENAI_MODEL}), Response: '{text[:100]}...'")
+                return {
+                    "response": text,
+                    "detected_language": detected_lang,
+                    "language_name": lang_info["name"],
+                    "source": f"openai ({OPENAI_MODEL})",
+                    "emergency": emergency_info,
+                    "is_emergency": is_emergency,
+                }
+            except RateLimitError as e:
+                last_error = e
+                print(f"[CHAT_FALLBACK_REASON] OpenAI API rate limit / quota error: {e}")
+                if "insufficient_quota" in str(e):
+                    # Out of quota: break retry loop and fall back immediately
+                    break
+                wait = (attempt + 1) * 2
+                print(f"[Chatbot] Rate limited — waiting {wait}s before retry")
+                time.sleep(wait)
+            except APIError as e:
+                last_error = e
+                print(f"[CHAT_FALLBACK_REASON] OpenAI API error: {e}")
+                break
+            except Exception as e:
+                last_error = e
+                print(f"[CHAT_FALLBACK_REASON] OpenAI unexpected error: {e}")
+                break
+
+        # If OpenAI failed/out-of-quota, fall back to Gemini if key exists
+        if gemini_key:
+            print("[Chatbot] OpenAI failed/rate-limited. Trying secondary provider Gemini...")
+            return _chat_with_gemini(
+                user_message, conversation_history, system_prompt,
+                lang_info, is_emergency, emergency_info, detected_lang, image
+            )
+    else:
+        # No OpenAI, call Gemini directly
         return _chat_with_gemini(
             user_message, conversation_history, system_prompt,
             lang_info, is_emergency, emergency_info, detected_lang, image
         )
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(_format_history(conversation_history))
-    messages.append({"role": "user", "content": _build_user_content(user_message, image)})
-
-    # 5. Call OpenAI with retries on transient failures
-    last_error = None
-    for attempt in range(3):
-        try:
-            completion = _client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=messages,
-                temperature=OPENAI_TEMPERATURE,
-                max_tokens=OPENAI_MAX_TOKENS,
-            )
-            text = (completion.choices[0].message.content or "").strip()
-            if not text:
-                raise RuntimeError("Empty response from OpenAI")
-
-            return {
-                "response": text,
-                "detected_language": detected_lang,
-                "language_name": lang_info["name"],
-                "source": f"openai ({OPENAI_MODEL})",
-                "emergency": emergency_info,
-                "is_emergency": is_emergency,
-            }
-        except RateLimitError as e:
-            last_error = e
-            wait = (attempt + 1) * 2
-            print(f"[Chatbot] Rate limited — waiting {wait}s")
-            time.sleep(wait)
-        except APIError as e:
-            last_error = e
-            print(f"[Chatbot] OpenAI API error: {e}")
-            break
-        except Exception as e:
-            last_error = e
-            print(f"[Chatbot] Unexpected error: {e}")
-            break
-
-    # 6. Graceful multilingual fallback
-    fallbacks = {
-        "en": "I'm having trouble reaching the AI service right now. Please try again in a moment.",
-        "hi": "क्षमा करें, अभी AI सेवा से कनेक्ट नहीं हो पा रहा। कृपया थोड़ी देर में पुनः प्रयास करें।",
-        "es": "Lo siento, no puedo conectar con el servicio de IA ahora mismo. Inténtalo de nuevo en un momento.",
-        "fr": "Désolé, impossible de joindre le service IA pour l'instant. Veuillez réessayer dans un instant.",
-        "de": "Entschuldigung, der KI-Dienst ist momentan nicht erreichbar. Bitte in Kürze erneut versuchen.",
-        "ar": "عذرًا، لا يمكنني الاتصال بخدمة الذكاء الاصطناعي الآن. يرجى المحاولة بعد قليل.",
-    }
+    # 6. Fallback if everything else failed
+    print(f"[CHAT_PROVIDER] Using fallback provider (dynamic or simulated)")
     simulated = _generate_dynamic_fallback(user_message, conversation_history, system_prompt, detected_lang)
     if not simulated:
         simulated = _generate_simulated_response(user_message, detected_lang)
