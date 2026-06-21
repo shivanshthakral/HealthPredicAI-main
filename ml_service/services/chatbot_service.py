@@ -36,6 +36,9 @@ def _get_openai_client():
         _last_openai_key = current_key
         if current_key:
             _client = OpenAI(api_key=current_key)
+            prefix = current_key[:15] if len(current_key) > 15 else current_key
+            print("OPENAI_KEY_PREFIX=", prefix)
+            print("OPENAI_MODEL=", OPENAI_MODEL)
         else:
             _client = None
     return _client
