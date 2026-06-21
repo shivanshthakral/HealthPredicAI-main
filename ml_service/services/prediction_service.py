@@ -61,13 +61,11 @@ def _load_models():
             try:
                 model = loader(p)
                 # ── sklearn 1.5+ compatibility fix ────────────────────────────
-                # LogisticRegression.multi_class was deprecated and removed.
-                # Strip it from loaded pickles to avoid AttributeError.
-                if hasattr(model, 'multi_class'):
-                    try:
-                        del model.multi_class
-                    except Exception:
-                        pass
+                # LogisticRegression.multi_class was deprecated and removed from __init__ constructor,
+                # but internal methods still expect it on the object.
+                # If missing, set it to 'auto' to avoid AttributeError.
+                if name == 'logistic_regression' and not hasattr(model, 'multi_class'):
+                    model.multi_class = 'auto'
                 globals()[var_name] = model
                 print(f"[OK] Loaded model: {name}")
             except Exception as e:

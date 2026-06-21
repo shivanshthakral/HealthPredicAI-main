@@ -66,16 +66,10 @@ def _validate_and_fix_models():
         if broken:
             print("[startup] Broken models detected — triggering retrain to fix sklearn compatibility...")
             try:
-                train_script = os.path.join(os.path.dirname(__file__), "train_model.py")
-                result = subprocess.run(
-                    [sys.executable, train_script],
-                    capture_output=True, text=True, timeout=300
-                )
-                if result.returncode == 0:
-                    ps._load_models()
-                    print("[startup] Retrain successful — models reloaded")
-                else:
-                    print(f"[startup] Retrain failed: {result.stderr[-500:]}")
+                import train_model
+                train_model.main()
+                ps._load_models()
+                print("[startup] Retrain successful — models reloaded")
             except Exception as retrain_err:
                 print(f"[startup] Retrain error: {retrain_err}")
         else:
@@ -199,27 +193,14 @@ def get_symptoms():
 def retrain_model():
     """Trigger model retraining from dataset."""
     try:
-        train_script = os.path.join(os.path.dirname(__file__), "train_model.py")
-        result = subprocess.run(
-            [sys.executable, train_script],
-            capture_output=True, text=True, timeout=300
-        )
-        if result.returncode == 0:
-            # Reload models
-            prediction_service._load_models()
-            return jsonify({
-                "success": True,
-                "message": "Model retrained successfully",
-                "output": result.stdout[-2000:]
-            }), 200
-        else:
-            return jsonify({
-                "success": False,
-                "error": "Training failed",
-                "stderr": result.stderr[-1000:]
-            }), 500
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Training timed out (>5 min)"}), 408
+        import train_model
+        train_model.main()
+        # Reload models
+        prediction_service._load_models()
+        return jsonify({
+            "success": True,
+            "message": "Model retrained successfully"
+        }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

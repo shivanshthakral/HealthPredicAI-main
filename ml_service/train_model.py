@@ -109,7 +109,7 @@ def train_models(X, y):
         max_depth=15,
         min_samples_split=2,
         random_state=42,
-        n_jobs=-1
+        n_jobs=1
     )
     rf.fit(X_train, y_train)
     rf_acc = accuracy_score(y_test, rf.predict(X_test))
@@ -126,7 +126,8 @@ def train_models(X, y):
             learning_rate=0.1,
             use_label_encoder=False,
             eval_metric='mlogloss',
-            random_state=42
+            random_state=42,
+            n_jobs=1
         )
         xgb.fit(X_train, y_train)
         xgb_acc = accuracy_score(y_test, xgb.predict(X_test))
@@ -225,6 +226,11 @@ def main():
 
     # Save
     save_models(models, le, symptom_columns, all_diseases, accuracies)
+
+    # Free memory
+    import gc
+    del models, le, X, y, accuracies
+    gc.collect()
 
     print("\n" + "=" * 60)
     print("✅ Training complete!")

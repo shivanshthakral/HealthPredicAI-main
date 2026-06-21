@@ -20,6 +20,21 @@ const GENERAL_TIMEOUT  = 30_000;  // 30s — all other ML calls
 const handleMLError = (error, res, fallbackMessage) => {
     const reqId = res.req?.requestId || 'unknown';
     let rawError = error.response?.data || error.message;
+    
+    console.log("--- ML Service Error Details ---");
+    console.log("Current ML_SERVICE_URL =", ML_URL);
+    console.log("Actual request URL =", error.config?.url || 'unknown');
+    if (error.response) {
+        console.log("Response status code =", error.response.status);
+        const snippet = typeof error.response.data === 'string'
+            ? error.response.data
+            : JSON.stringify(error.response.data);
+        console.log("Response body snippet (first 200 chars):", snippet.slice(0, 200));
+    } else {
+        console.log("No response received. Error message:", error.message);
+    }
+    console.log("--------------------------------");
+
     console.error(`[AI Error] [${reqId}] ${fallbackMessage}:`, rawError);
 
     // Check if the response contains HTML (routing mismatch / 404 page)
@@ -104,6 +119,7 @@ router.post('/predict', async (req, res) => {
 // ── Chat with AI ──────────────────────────────────────────────────────────────
 router.post('/chat', async (req, res) => {
     try {
+        console.log("ML_URL =", ML_URL);
         const response = await axios.post(
             `${ML_URL}/chat`,
             req.body,
