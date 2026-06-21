@@ -382,6 +382,10 @@ def _chat_with_gemini(user_message, conversation_history, system_prompt, lang_in
     for attempt in range(max_retries + 1):
         try:
             client_session = _http_session if _http_session else requests
+            print("AI_PROVIDER=", "gemini-1.5-flash")
+            print("OPENAI_KEY_PRESENT=", bool(os.environ.get("OPENAI_API_KEY")))
+            print("GEMINI_KEY_PRESENT=", bool(os.environ.get("GEMINI_API_KEY")))
+            print("Incoming message:", user_message)
             resp = client_session.post(url, json=payload, timeout=timeout_seconds)
             
             if resp.status_code == 403:
@@ -409,6 +413,7 @@ def _chat_with_gemini(user_message, conversation_history, system_prompt, lang_in
         res_json = resp.json()
         try:
             text = res_json["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print("AI response:", text)
             print(f"[CHAT_RESPONSE] Source: gemini ({GEMINI_MODEL}), Response: '{text[:100]}...'")
             return {
                 "response": text,
@@ -504,6 +509,10 @@ def chat_with_ai(user_message, conversation_history=None, language="auto", image
         for attempt in range(3):
             try:
                 # Apply 8-second timeout for responsive user experience
+                print("AI_PROVIDER=", OPENAI_MODEL)
+                print("OPENAI_KEY_PRESENT=", bool(os.environ.get("OPENAI_API_KEY")))
+                print("GEMINI_KEY_PRESENT=", bool(os.environ.get("GEMINI_API_KEY")))
+                print("Incoming message:", user_message)
                 completion = client.chat.completions.create(
                     model=OPENAI_MODEL,
                     messages=messages,
@@ -515,6 +524,7 @@ def chat_with_ai(user_message, conversation_history=None, language="auto", image
                 if not text:
                      raise RuntimeError("Empty response from OpenAI")
 
+                print("AI response:", text)
                 print(f"[CHAT_RESPONSE] Source: openai ({OPENAI_MODEL}), Response: '{text[:100]}...'")
                 return {
                     "response": text,
