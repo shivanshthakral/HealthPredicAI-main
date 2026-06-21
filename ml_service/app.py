@@ -33,6 +33,75 @@ from services import timeline_service
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+
+def _validate_and_fix_models():
+    """
+    Smoke-test the loaded ML models on startup.
+    If predict_proba fails (e.g., sklearn version mismatch), trigger retrain
+    automatically so the service heals itself on next deploy.
+    """
+    try:
+        from services import prediction_service as ps
+        if not ps._MODELS_LOADED or ps._rf_model is None:
+            print("[startup] Models not loaded — using rule-based fallback")
+            return
+
+        import numpy as np
+        n_features = len(ps._symptom_columns)
+        if n_features == 0:
+            return
+
+        test_vector = np.zeros((1, n_features))
+        broken = False
+
+        for name, model in [("rf", ps._rf_model), ("xgb", ps._xgb_model), ("lr", ps._lr_model)]:
+            if model is None:
+                continue
+            try:
+                model.predict_proba(test_vector)
+            except Exception as e:
+                print(f"[startup] Model '{name}' failed smoke test: {e}")
+                broken = True
+
+        if broken:
+            print("[startup] Broken models detected — triggering retrain to fix sklearn compatibility...")
+            try:
+                train_script = os.path.join(os.path.dirname(__file__), "train_model.py")
+                result = subprocess.run(
+                    [sys.executable, train_script],
+                    capture_output=True, text=True, timeout=300
+                )
+                if result.returncode == 0:
+                    ps._load_models()
+                    print("[startup] Retrain successful — models reloaded")
+                else:
+                    print(f"[startup] Retrain failed: {result.stderr[-500:]}")
+            except Exception as retrain_err:
+                print(f"[startup] Retrain error: {retrain_err}")
+        else:
+            print("[startup] All models passed smoke test ✓")
+    except Exception as e:
+        print(f"[startup] Model validation skipped: {e}")
+
+
+# ── Run startup model validation once (works with both direct run and gunicorn) ─
+import threading as _threading
+_startup_done = False
+def _startup():
+    global _startup_done
+    if _startup_done:
+        return
+    _startup_done = True
+    _validate_and_fix_models()
+
+# Trigger on first request (deferred to avoid blocking import)
+@app.before_request
+def _on_first_request():
+    global _startup_done
+    if not _startup_done:
+        _threading.Thread(target=_startup, daemon=True).start()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # ROOT & HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1664,4 +1733,5 @@ if __name__ == "__main__":
     print(f"   GEMINI_API_KEY set: {bool(os.environ.get('GEMINI_API_KEY', ''))}")
     print(f"   OPENAI_API_KEY set: {bool(os.environ.get('OPENAI_API_KEY', ''))}")
     print("=" * 50)
+    _validate_and_fix_models()
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
